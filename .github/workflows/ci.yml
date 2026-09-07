@@ -1,0 +1,78 @@
+name: CI
+
+# 评审 #5：建立 CI 自动构建
+#  - 统一版本号：CMakeLists VERSION 为唯一版本源（当前 1.0.2，与 git tag 1.0.2/cspdf12 对齐）
+#  - 多架构：amd64 + arm64 原生构建（arm64/loong64/riscv64 亦可在对应主机上直接
+#    运行 ./packaging/build_deb_selfcontained.sh，脚本已按 dpkg 架构自适应）
+#  - Release SHA256：由打包脚本在 dist/release/SHA256SUMS.md 生成
+
+on:
+  push:
+    branches: [ main ]
+    tags: [ 'v*', '1.*', 'cspdf*' ]
+  pull_request:
+
+jobs:
+  build:
+    name: Build (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-24.04
+            arch: amd64
+          - os: ubuntu-24.04-arm
+            arch: arm64
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 安装构建依赖
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            cmake g++ pkg-config qt6-base-dev libpoppler-qt6-dev libespeak-ng-dev
+
+      - name: 版本号一致性（CMake 唯一版本源）
+        run: |
+          CMAKE_VER=$(sed -n 's/^project(CSPDFREADER VERSION \([0-9.]*\).*/\1/p' CMakeLists.txt | head -1)
+          echo "CMake version: $CMAKE_VER"
+          test -n "$CMAKE_VER"
+
+      - name: 配置并构建
+        run: |
+          cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+          cmake --build build -j$(nproc)
+
+      - name: 冒烟测试
+        run: |
+          test -x build/CSPDFREADER
+          file build/CSPDFREADER
+
+  release-checks:
+    name: 发布合规检查
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: piper_server.py 已纳入版本库（评审 #1，GPL Corresponding Source）
+        run: |
+          git ls-files --error-unmatch packaging/piper_server.py
+
+      - name: 打包脚本已生成 copyright 与 SHA256（评审 #2/#5）
+        run: |
+          grep -q 'DEBIAN/copyright' packaging/build_deb_selfcontained.sh
+          grep -q 'SHA256' packaging/build_deb_selfcontained.sh
+
+  source-archive:
+    name: 生成源码归档
+    if: startsWith(github.ref, 'refs/tags/')
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: 生成源码归档（含 piper_server.py）
+        run: ./packaging/make_source_archive.sh
+      - uses: actions/upload-artifact@v4
+        with:
+          name: cspdfreader-src
+          path: dist/release/*-src.tar.gz

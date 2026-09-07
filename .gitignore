@@ -1,0 +1,5 @@
+build/
+dist/*
+!dist/release/
+*.deb
+新建文本.txt
